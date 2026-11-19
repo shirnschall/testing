@@ -114,3 +114,136 @@ jobs:
             build.log
             build/CMakeCache.txt
             build/CMakeFiles/CMakeConfigureLog.yaml
+
+  occt:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Open-Cascade-SAS/OCCT
+          ref: V8_0_1
+          path: occt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: tools
+        run: python -m pip install "cmake>=4" ninja
+
+      - name: configure
+        run: |
+          cmake -S occt -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/occt-prefix" \
+            -DBUILD_LIBRARY_TYPE=Static \
+            -DBUILD_MODULE_FoundationClasses=ON \
+            -DBUILD_MODULE_ModelingData=ON \
+            -DBUILD_MODULE_ModelingAlgorithms=ON \
+            -DBUILD_MODULE_DataExchange=ON \
+            -DBUILD_MODULE_Visualization=OFF \
+            -DBUILD_MODULE_ApplicationFramework=OFF \
+            -DBUILD_MODULE_Draw=OFF \
+            -DBUILD_MODULE_DETools=OFF \
+            -DUSE_FREETYPE=OFF \
+            -DUSE_OPENGL=OFF \
+            -DUSE_XLIB=OFF \
+            -DBUILD_DOC_Overview=OFF \
+            2>&1 | tee occt-configure.log
+
+      - name: build
+        continue-on-error: true
+        run: |
+          cmake --build build -j 3 2>&1 | tee occt-build.log
+          cmake --install build 2>&1 | tee -a occt-build.log
+          tar -czf occt-ios.tgz occt-prefix
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: occt-ios
+          path: |
+            occt-configure.log
+            occt-build.log
+            occt-ios.tgz
+
+  netgen-python:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: NGSolve/netgen
+          ref: ${{ env.NETGEN_COMMIT }}
+          path: netgen
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: tools
+        run: python -m pip install "cmake>=4" ninja
+
+      - name: python for ios
+        run: |
+          curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          mkdir pyios
+          tar -xzf pyios.tgz -C pyios
+          find pyios -maxdepth 4 -not -path '*/lib/python3.13/*' | head -60
+          inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
+          lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
+          echo "include $inc"
+          echo "library $lib"
+          echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
+          echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
+
+      - name: makerls
+        run: |
+          mkdir -p "$RUNNER_TEMP/host"
+          c++ -O2 netgen/rules/makerlsfile.cpp -o "$RUNNER_TEMP/host/makerls"
+          echo "$RUNNER_TEMP/host" >> "$GITHUB_PATH"
+
+      - name: configure
+        run: |
+          cmake -S netgen -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/prefix" \
+            -DUSE_SUPERBUILD=OFF \
+            -DUSE_GUI=OFF \
+            -DUSE_PYTHON=ON \
+            -DUSE_OCC=OFF \
+            -DUSE_NATIVE_ARCH=OFF \
+            -DBUILD_STUB_FILES=OFF \
+            -DPREFER_SYSTEM_PYBIND11=OFF \
+            -DPython3_EXECUTABLE="$(command -v python)" \
+            -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
+            -DPython3_LIBRARY="$PY_IOS_LIB" \
+            -DNG_INSTALL_DIR_PYTHON=python \
+            2>&1 | tee configure.log
+
+      - name: build
+        continue-on-error: true
+        run: |
+          cmake --build build -j 3 2>&1 | tee build.log
+          cmake --install build 2>&1 | tee -a build.log
+          find prefix -name '*.so' -o -name '*.dylib' | head -20
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netgen-python-ios
+          path: |
+            configure.log
+            build.log
+            build/CMakeCache.txt
