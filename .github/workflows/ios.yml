@@ -9,56 +9,10 @@ defaults:
     shell: bash
 
 env:
-  PLANEX2D_VERSION: "0.4.1"
   NETGEN_COMMIT: 98232f962908dd16402f2cab343b62ea981a7c64
   IOS_DEPLOYMENT_TARGET: "17.0"
 
 jobs:
-  planex2d-core:
-    runs-on: macos-15
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: sdist
-        run: |
-          python -m pip download --no-deps --no-binary :all: "planex2d==$PLANEX2D_VERSION" -d sdist
-          mkdir planex2d
-          tar -xzf "sdist/planex2d-$PLANEX2D_VERSION.tar.gz" -C planex2d --strip-components 1
-          cp tests/ios_smoke_test.py planex2d/
-
-      - name: build and test
-        working-directory: planex2d
-        env:
-          CIBW_PLATFORM: ios
-          CIBW_BUILD: "cp313-* cp314-*"
-          CIBW_ARCHS_IOS: "arm64_iphonesimulator arm64_iphoneos"
-          CIBW_XBUILD_TOOLS: "cmake ninja"
-          CIBW_CONFIG_SETTINGS: "cmake.define.PLANEX_OCC=OFF"
-          CIBW_TEST_SOURCES: "ios_smoke_test.py"
-          CIBW_TEST_REQUIRES: "pytest"
-          CIBW_TEST_COMMAND: "python -m pytest ios_smoke_test.py -v"
-          CIBW_BUILD_VERBOSITY: "1"
-          CIBW_ENVIRONMENT: "IPHONEOS_DEPLOYMENT_TARGET=${{ env.IOS_DEPLOYMENT_TARGET }}"
-          IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOYMENT_TARGET }}
-          PIP_EXTRA_INDEX_URL: "https://pypi.anaconda.org/beeware/simple"
-          PIP_ONLY_BINARY: "numpy"
-        run: |
-          python -m pip install "cibuildwheel==4.3.5"
-          python -m cibuildwheel --output-dir ../wheelhouse 2>&1 | tee ../planex2d-ios.log
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: planex2d-ios
-          path: |
-            wheelhouse/
-            planex2d-ios.log
-
   netgen-configure:
     runs-on: macos-15
     timeout-minutes: 90
@@ -229,6 +183,9 @@ jobs:
             -DPython3_EXECUTABLE="$(command -v python)" \
             -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
             -DPython3_LIBRARY="$PY_IOS_LIB" \
+            -DPython_EXECUTABLE="$(command -v python)" \
+            -DPython_INCLUDE_DIR="$PY_IOS_INC" \
+            -DPython_LIBRARY="$PY_IOS_LIB" \
             -DNG_INSTALL_DIR_PYTHON=python \
             2>&1 | tee configure.log
 
