@@ -37,7 +37,7 @@ jobs:
           - sdk: iphonesimulator
             suffix: "-sim"
             seed_name: occt-ios-sim
-            seed_run: ""
+            seed_run: "44465574428"
     runs-on: macos-15
     timeout-minutes: 240
     env:

@@ -10,7 +10,7 @@ def test_it_runs_on_ios():
 
 def test_netgen_meshes_a_square():
     from netgen.geom2d import unit_square
-    assert unit_square.GenerateMesh(maxh=0.1).ne > 100
+    assert len(unit_square.GenerateMesh(maxh=0.1).Elements2D()) > 100
 
 
 def test_ngsolve_runs_threads():
