@@ -15,10 +15,12 @@ defaults:
 env:
   NETGEN_COMMIT: 98232f962908dd16402f2cab343b62ea981a7c64
   NGSOLVE_COMMIT: fb1c068b7a353d893bdc6b7f6c538b4338f39038
+  PLANEX2D_VERSION: "0.4.1"
   OCCT_TAG: V8_0_1
   OCCT_SEED_RUN: "44445999000"
-  OCCT_CACHE_KEY: occt-ios-V8_0_1-17.0-1
-  NETGEN_CACHE_KEY: netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-1-py313-1
+  OCCT_CACHE_KEY: occt-ios-V8_0_1-17.0-2
+  NETGEN_CACHE_KEY: netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-2-py313-2
+  NGSOLVE_CACHE_KEY: ngsolve-ios-fb1c068b7a35-netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-2-py313-2-1
   IOS_DEPLOYMENT_TARGET: "17.0"
 
 jobs:
@@ -48,11 +50,18 @@ jobs:
             tar -xzf seed/occt-ios.tgz
           fi
           cfg=$(find occt-prefix -name OpenCASCADEConfig.cmake 2>/dev/null | head -1)
+          dylib=$(find occt-prefix -name libocct.dylib 2>/dev/null | head -1)
           echo "config $cfg"
+          echo "shared $dylib"
           if [ -n "$cfg" ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$dylib" ]; then
+            echo "shared=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "shared=true" >> "$GITHUB_OUTPUT"
           fi
 
       - if: steps.need.outputs.build == 'true'
@@ -62,15 +71,18 @@ jobs:
           ref: ${{ env.OCCT_TAG }}
           path: occt
 
-      - if: steps.need.outputs.build == 'true'
+      - if: steps.need.outputs.shared == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
+      - name: tools
+        if: steps.need.outputs.shared == 'true'
+        run: python -m pip install "cmake>=4" ninja
+
       - name: build
         if: steps.need.outputs.build == 'true'
         run: |
-          python -m pip install "cmake>=4" ninja
           cmake -S occt -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -95,10 +107,41 @@ jobs:
           cmake --build build -j 3 2>&1 | tee occt-build.log
           cmake --install build 2>&1 | tee -a occt-build.log
 
+      - name: shared
+        if: steps.need.outputs.shared == 'true'
+        run: |
+          cfg=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")
+          lib=$(dirname "$(find "$PWD/occt-prefix" -name libTKernel.a | head -1)")
+          mkdir -p occt-shared
+          printf '%s\n' \
+            'cmake_minimum_required(VERSION 3.24)' \
+            'project(occt CXX)' \
+            'find_package(OpenCASCADE REQUIRED CONFIG)' \
+            'file(WRITE ${CMAKE_BINARY_DIR}/occt.cpp "")' \
+            'add_library(occt SHARED ${CMAKE_BINARY_DIR}/occt.cpp)' \
+            'target_link_options(occt PRIVATE LINKER:-all_load)' \
+            'target_link_libraries(occt PRIVATE ${OpenCASCADE_LIBRARIES})' \
+            > occt-shared/CMakeLists.txt
+          cmake -S occt-shared -B occt-shared/build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOpenCASCADE_DIR="$cfg"
+          cmake --build occt-shared/build -v 2>&1 | tee occt-shared.log
+          cp occt-shared/build/libocct.dylib "$lib/"
+          otool -D "$lib/libocct.dylib"
+          otool -L "$lib/libocct.dylib"
+          sed -i '' -E 's#/libTK[A-Za-z0-9]+\.a#/libocct.dylib#g' "$cfg"/OpenCASCADE*Targets-release.cmake
+          grep -c libocct.dylib "$cfg"/OpenCASCADE*Targets-release.cmake
+          if grep -n 'libTK[A-Za-z0-9]*\.a' "$cfg"/OpenCASCADE*Targets-release.cmake; then exit 1; fi
+
       - name: libraries
         run: |
           find occt-prefix -name OpenCASCADEConfig.cmake
           find occt-prefix -name 'libTK*.a' | sort
+          ls -la "$(find occt-prefix -name libocct.dylib | head -1)"
 
   netgen:
     needs: occt
@@ -185,6 +228,7 @@ jobs:
             -DUSE_NATIVE_ARCH=OFF \
             -DBUILD_STUB_FILES=OFF \
             -DPREFER_SYSTEM_PYBIND11=OFF \
+            -DNG_INSTALL_PYBIND=ON \
             -DPYBIND11_USE_CROSSCOMPILING=ON \
             -DPython3_EXECUTABLE="$(command -v python)" \
             -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
@@ -200,7 +244,15 @@ jobs:
         run: |
           cmake --build build -j 3 2>&1 | tee build.log
           cmake --install build 2>&1 | tee -a build.log
-          find prefix -name '*.so' -o -name '*.dylib' -o -name 'NetgenConfig.cmake' | head -30
+
+      - name: modules
+        run: |
+          find prefix \( -name '*.so' -o -name '*.dylib' \) | sort
+          find prefix -name NetgenConfig.cmake -o -path '*pybind11/pybind11.h' -o -path '*netgen/version.py'
+          for f in $(find prefix \( -name '*.so' -o -name '*.dylib' \)); do
+            echo "$f"
+            otool -L "$f" | grep -i -E "occ|TK" || true
+          done
 
       - uses: actions/upload-artifact@v4
         if: always() && steps.cache.outputs.cache-hit != 'true'
@@ -216,24 +268,34 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 180
     steps:
-      - uses: actions/cache/restore@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: ngsolve-prefix
+          key: ${{ env.NGSOLVE_CACHE_KEY }}
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
         with:
           path: occt-prefix
           key: ${{ env.OCCT_CACHE_KEY }}
           fail-on-cache-miss: true
 
-      - uses: actions/cache/restore@v4
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
         with:
           path: prefix
           key: ${{ env.NETGEN_CACHE_KEY }}
           fail-on-cache-miss: true
 
       - name: netgen
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           echo "OCCT_CMAKE_DIR=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")" >> "$GITHUB_ENV"
           echo "NETGEN_CMAKE_DIR=$(dirname "$(find "$PWD/prefix" -name NetgenConfig.cmake | head -1)")" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v4
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
         with:
           repository: NGSolve/ngsolve
           ref: ${{ env.NGSOLVE_COMMIT }}
@@ -241,14 +303,17 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
       - name: tools
+        if: steps.cache.outputs.cache-hit != 'true'
         run: python -m pip install "cmake>=4" ninja
 
       - name: python for ios
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
           mkdir pyios
@@ -260,6 +325,7 @@ jobs:
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
 
       - name: patch
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           sed -i '' 's/std::system (cmd.c_str()) != 0/true/' ngsolve/ngstd/gpu_cpu.cpp
           sed -i '' 's/int err = system((chdir_cmd + scompile).c_str());/int err = 1;/' ngsolve/fem/code_generation.cpp
@@ -267,12 +333,14 @@ jobs:
           if grep -nE "[^a-zA-Z_]system *\(" ngsolve/ngstd/gpu_cpu.cpp ngsolve/fem/code_generation.cpp; then exit 1; fi
 
       - name: kernel_generator
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/host"
           c++ -std=c++20 -O2 ngsolve/basiclinalg/generate_mat_kernels.cpp -o "$RUNNER_TEMP/host/kernel_generator"
           echo "$RUNNER_TEMP/host" >> "$GITHUB_PATH"
 
       - name: configure
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           echo "netgen $NETGEN_CMAKE_DIR"
           echo "occt $OCCT_CMAKE_DIR"
@@ -320,15 +388,108 @@ jobs:
             2>&1 | tee configure.log
 
       - name: build
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cmake --build build -j 3 2>&1 | tee build.log
           cmake --install build 2>&1 | tee -a build.log
-          find ngsolve-prefix -name '*.so' -o -name '*.dylib' | head -30
+
+      - name: modules
+        run: |
+          find ngsolve-prefix \( -name '*.so' -o -name '*.dylib' \) | sort
+          find ngsolve-prefix -name NGSolveConfig.cmake
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          name: ngsolve-ios
+          path: |
+            configure.log
+            build.log
+            build/CMakeCache.txt
+
+  planex2d-occ:
+    needs: netgen
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: prefix
+          key: ${{ env.NETGEN_CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: tools
+        run: python -m pip install "cmake>=4" ninja
+
+      - name: python for ios
+        run: |
+          curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          mkdir pyios
+          tar -xzf pyios.tgz -C pyios
+          inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
+          lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
+          sysdata=$(find "$PWD/pyios" -name '_sysconfigdata_*iphoneos*.py' | head -1)
+          soabi=$(sed -n "s/.*'SOABI': '\([^']*\)'.*/\1/p" "$sysdata" | head -1)
+          echo "sysconfig $sysdata"
+          echo "soabi $soabi"
+          [ -n "$soabi" ]
+          echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
+          echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
+          echo "PY_IOS_SOABI=$soabi" >> "$GITHUB_ENV"
+
+      - name: sources
+        run: |
+          curl -sSfL --retry 3 -o planex2d.tgz "https://files.pythonhosted.org/packages/source/p/planex2d/planex2d-$PLANEX2D_VERSION.tar.gz"
+          tar -xzf planex2d.tgz
+
+      - name: configure
+        run: |
+          occt=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")
+          netgen=$(dirname "$(find "$PWD/prefix" -name NetgenConfig.cmake | head -1)")
+          ngver=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$(find "$PWD/prefix" -path '*netgen/version.py' | head -1)")
+          echo "occt $occt"
+          echo "netgen $netgen $ngver"
+          [ -n "$ngver" ]
+          cmake -S "planex2d-$PLANEX2D_VERSION" -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/planex-prefix" \
+            -DPLANEX_CORE=OFF \
+            -DPLANEX_OCC=ON \
+            -DPLANEX_VERSION="$PLANEX2D_VERSION" \
+            -DPLANEX_OCC_DESTINATION="planex_occ/ng_${ngver//./_}" \
+            -DNetgen_DIR="$netgen" \
+            -DOpenCASCADE_DIR="$occt" \
+            -DPython3_EXECUTABLE="$(command -v python)" \
+            -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
+            -DPython3_LIBRARY="$PY_IOS_LIB" \
+            -DPython3_SOABI="$PY_IOS_SOABI" \
+            2>&1 | tee configure.log
+
+      - name: build
+        run: |
+          cmake --build build 2>&1 | tee build.log
+          cmake --install build 2>&1 | tee -a build.log
+          find planex-prefix -type f
+          otool -L "$(find planex-prefix -name '_planex_occ*.so' | head -1)"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ngsolve-ios
+          name: planex2d-occ-ios
           path: |
             configure.log
             build.log
