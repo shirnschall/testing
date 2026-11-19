@@ -17,7 +17,7 @@ env:
   NGSOLVE_COMMIT: fb1c068b7a353d893bdc6b7f6c538b4338f39038
   PLANEX2D_VERSION: "0.4.1"
   OCCT_TAG: V8_0_1
-  OCCT_SEED_RUN: "44445999000"
+  OCCT_STATIC_KEY: occt-ios-V8_0_1-17.0-static-1
   OCCT_CACHE_KEY: occt-ios-V8_0_1-17.0-2
   NETGEN_CACHE_KEY: netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-2-py313-2
   NGSOLVE_CACHE_KEY: ngsolve-ios-fb1c068b7a35-netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-2-py313-2-1
@@ -32,8 +32,12 @@ jobs:
         include:
           - sdk: iphoneos
             suffix: ""
+            seed_name: occt-ios
+            seed_run: "44445999000"
           - sdk: iphonesimulator
             suffix: "-sim"
+            seed_name: occt-ios-sim
+            seed_run: ""
     runs-on: macos-15
     timeout-minutes: 240
     env:
@@ -45,13 +49,20 @@ jobs:
           path: occt-prefix
           key: ${{ env.OCCT_CACHE_KEY }}${{ matrix.suffix }}
 
+      - id: static
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_STATIC_KEY }}${{ matrix.suffix }}
+
       - id: seed
-        if: steps.cache.outputs.cache-hit != 'true' && matrix.sdk == 'iphoneos'
+        if: steps.cache.outputs.cache-hit != 'true' && steps.static.outputs.cache-hit != 'true' && matrix.seed_run != ''
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: occt-ios
-          run-id: ${{ env.OCCT_SEED_RUN }}
+          name: ${{ matrix.seed_name }}
+          run-id: ${{ matrix.seed_run }}
           github-token: ${{ github.token }}
           path: seed
 
@@ -118,6 +129,20 @@ jobs:
             2>&1 | tee occt-configure.log
           cmake --build build -j 3 2>&1 | tee occt-build.log
           cmake --install build 2>&1 | tee -a occt-build.log
+          tar -czf occt-ios.tgz occt-prefix
+
+      - if: steps.need.outputs.build == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_STATIC_KEY }}${{ matrix.suffix }}
+
+      - if: steps.need.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.seed_name }}
+          path: occt-ios.tgz
+          retention-days: 90
 
       - name: shared
         if: steps.need.outputs.shared == 'true'
@@ -566,7 +591,9 @@ jobs:
           python-version: "3.13"
 
       - name: sources
-        run: curl -sSfL --retry 3 -o "planex2d-$PLANEX2D_VERSION.tar.gz" "https://files.pythonhosted.org/packages/source/p/planex2d/planex2d-$PLANEX2D_VERSION.tar.gz"
+        run: |
+          curl -sSfL --retry 3 -o planex2d.tgz "https://files.pythonhosted.org/packages/source/p/planex2d/planex2d-$PLANEX2D_VERSION.tar.gz"
+          tar -xzf planex2d.tgz
 
       - name: wheels
         env:
@@ -584,7 +611,7 @@ jobs:
           PIP_ONLY_BINARY: numpy
         run: |
           python -m pip install cibuildwheel==4.3.5
-          python -m cibuildwheel --output-dir wheelhouse "planex2d-$PLANEX2D_VERSION.tar.gz"
+          python -m cibuildwheel --output-dir wheelhouse "planex2d-$PLANEX2D_VERSION"
 
       - uses: actions/upload-artifact@v4
         with:
