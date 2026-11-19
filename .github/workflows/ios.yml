@@ -13,62 +13,6 @@ env:
   IOS_DEPLOYMENT_TARGET: "17.0"
 
 jobs:
-  netgen-configure:
-    runs-on: macos-15
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: NGSolve/netgen
-          ref: ${{ env.NETGEN_COMMIT }}
-          path: netgen
-          fetch-depth: 0
-          submodules: recursive
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: tools
-        run: python -m pip install "cmake>=4" ninja
-
-      - name: configure
-        run: |
-          cmake -S netgen -B build -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PWD/prefix" \
-            -DUSE_SUPERBUILD=OFF \
-            -DUSE_GUI=OFF \
-            -DUSE_PYTHON=OFF \
-            -DUSE_OCC=OFF \
-            -DUSE_NATIVE_ARCH=OFF \
-            -DBUILD_STUB_FILES=OFF \
-            2>&1 | tee configure.log
-
-      - name: makerls
-        run: |
-          mkdir -p "$RUNNER_TEMP/host"
-          c++ -O2 netgen/rules/makerlsfile.cpp -o "$RUNNER_TEMP/host/makerls"
-          echo "$RUNNER_TEMP/host" >> "$GITHUB_PATH"
-
-      - name: build
-        continue-on-error: true
-        run: cmake --build build -j 3 2>&1 | tee build.log
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: netgen-ios
-          path: |
-            configure.log
-            build.log
-            build/CMakeCache.txt
-            build/CMakeFiles/CMakeConfigureLog.yaml
-
   netgen-python:
     runs-on: macos-15
     timeout-minutes: 90
@@ -102,6 +46,11 @@ jobs:
           echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
 
+      - name: patch
+        run: |
+          sed -i '' 's/^      if(NOT EMSCRIPTEN)$/      if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)/' netgen/CMakeLists.txt
+          grep -n "if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)" netgen/CMakeLists.txt
+
       - name: makerls
         run: |
           mkdir -p "$RUNNER_TEMP/host"
@@ -131,7 +80,6 @@ jobs:
             -DPython_ROOT_DIR="$PY_IOS_ROOT" \
             -DPython_INCLUDE_DIR="$PY_IOS_INC" \
             -DPython_LIBRARY="$PY_IOS_LIB" \
-            --debug-find-pkg=Python \
             -DNG_INSTALL_DIR_PYTHON=python \
             2>&1 | tee configure.log
 
