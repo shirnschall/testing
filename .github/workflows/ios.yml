@@ -278,6 +278,8 @@ jobs:
           echo "occt $OCCT_CMAKE_DIR"
           pyb="$PWD/ngsolve/external_dependencies/netgen/external_dependencies/pybind11/include"
           ls "$pyb/pybind11/pybind11.h"
+          veclib="$(xcrun --sdk iphoneos --show-sdk-path)/System/Library/Frameworks/Accelerate.framework/Frameworks"
+          ls "$veclib/vecLib.framework/Headers/cblas.h" "$veclib/vecLib.framework/Headers/Sparse/Solve.h"
           cmake -S ngsolve -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -285,7 +287,7 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-march=armv8.3-a" \
-            -DCMAKE_CXX_FLAGS="-march=armv8.3-a" \
+            -DCMAKE_CXX_FLAGS="-march=armv8.3-a -F$veclib" \
             -DCMAKE_INSTALL_PREFIX="$PWD/ngsolve-prefix" \
             -DUSE_SUPERBUILD=OFF \
             -DNetgen_DIR="$NETGEN_CMAKE_DIR" \
