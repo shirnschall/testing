@@ -259,6 +259,13 @@ jobs:
           echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
 
+      - name: patch
+        run: |
+          sed -i '' 's/std::system (cmd.c_str()) != 0/true/' ngsolve/ngstd/gpu_cpu.cpp
+          sed -i '' 's/int err = system((chdir_cmd + scompile).c_str());/int err = 1;/' ngsolve/fem/code_generation.cpp
+          sed -i '' 's/int err = system((chdir_cmd + slink).c_str());/int err = 1;/' ngsolve/fem/code_generation.cpp
+          if grep -nE "[^a-zA-Z_]system *\(" ngsolve/ngstd/gpu_cpu.cpp ngsolve/fem/code_generation.cpp; then exit 1; fi
+
       - name: kernel_generator
         run: |
           mkdir -p "$RUNNER_TEMP/host"
