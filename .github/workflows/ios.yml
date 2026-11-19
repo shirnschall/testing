@@ -4,19 +4,107 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
 defaults:
   run:
     shell: bash
 
 env:
   NETGEN_COMMIT: 98232f962908dd16402f2cab343b62ea981a7c64
+  OCCT_TAG: V8_0_1
+  OCCT_SEED_RUN: "44445999000"
+  OCCT_CACHE_KEY: occt-ios-V8_0_1-17.0-1
   IOS_DEPLOYMENT_TARGET: "17.0"
 
 jobs:
-  netgen-python:
+  occt:
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_CACHE_KEY }}
+
+      - id: seed
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: occt-ios
+          run-id: ${{ env.OCCT_SEED_RUN }}
+          github-token: ${{ github.token }}
+          path: seed
+
+      - id: need
+        run: |
+          if [ ! -f occt-prefix/lib/cmake/opencascade/OpenCASCADEConfig.cmake ] && [ -f seed/occt-ios.tgz ]; then
+            tar -xzf seed/occt-ios.tgz
+          fi
+          if [ -f occt-prefix/lib/cmake/opencascade/OpenCASCADEConfig.cmake ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.need.outputs.build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Open-Cascade-SAS/OCCT
+          ref: ${{ env.OCCT_TAG }}
+          path: occt
+
+      - if: steps.need.outputs.build == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: build
+        if: steps.need.outputs.build == 'true'
+        run: |
+          python -m pip install "cmake>=4" ninja
+          cmake -S occt -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/occt-prefix" \
+            -DBUILD_LIBRARY_TYPE=Static \
+            -DBUILD_MODULE_FoundationClasses=ON \
+            -DBUILD_MODULE_ModelingData=ON \
+            -DBUILD_MODULE_ModelingAlgorithms=ON \
+            -DBUILD_MODULE_DataExchange=ON \
+            -DBUILD_MODULE_Visualization=OFF \
+            -DBUILD_MODULE_ApplicationFramework=OFF \
+            -DBUILD_MODULE_Draw=OFF \
+            -DBUILD_MODULE_DETools=OFF \
+            -DUSE_FREETYPE=OFF \
+            -DUSE_OPENGL=OFF \
+            -DUSE_XLIB=OFF \
+            -DBUILD_DOC_Overview=OFF \
+            2>&1 | tee occt-configure.log
+          cmake --build build -j 3 2>&1 | tee occt-build.log
+          cmake --install build 2>&1 | tee -a occt-build.log
+
+      - name: libraries
+        run: ls occt-prefix/lib
+
+  netgen:
+    needs: occt
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_CACHE_KEY }}
+          fail-on-cache-miss: true
+
       - uses: actions/checkout@v4
         with:
           repository: NGSolve/netgen
@@ -37,7 +125,6 @@ jobs:
           curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
           mkdir pyios
           tar -xzf pyios.tgz -C pyios
-          find pyios -maxdepth 4 -not -path '*/lib/python3.13/*' | head -60
           inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
           lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
           echo "include $inc"
@@ -69,7 +156,8 @@ jobs:
             -DUSE_SUPERBUILD=OFF \
             -DUSE_GUI=OFF \
             -DUSE_PYTHON=ON \
-            -DUSE_OCC=OFF \
+            -DUSE_OCC=ON \
+            -DOpenCascade_DIR="$PWD/occt-prefix/lib/cmake/opencascade" \
             -DUSE_NATIVE_ARCH=OFF \
             -DBUILD_STUB_FILES=OFF \
             -DPREFER_SYSTEM_PYBIND11=OFF \
@@ -93,7 +181,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: netgen-python-ios
+          name: netgen-ios
           path: |
             configure.log
             build.log
