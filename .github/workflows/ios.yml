@@ -276,6 +276,8 @@ jobs:
         run: |
           echo "netgen $NETGEN_CMAKE_DIR"
           echo "occt $OCCT_CMAKE_DIR"
+          pyb="$PWD/ngsolve/external_dependencies/netgen/external_dependencies/pybind11/include"
+          ls "$pyb/pybind11/pybind11.h"
           cmake -S ngsolve -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -303,6 +305,7 @@ jobs:
             -DBUILD_FOR_CONDA=ON \
             -DUSE_PYTHON=ON \
             -DPYBIND11_USE_CROSSCOMPILING=ON \
+            -DNETGEN_PYBIND_INCLUDE_DIR="$pyb" \
             -DPython3_EXECUTABLE="$(command -v python)" \
             -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
             -DPython3_LIBRARY="$PY_IOS_LIB" \
