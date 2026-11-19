@@ -60,6 +60,7 @@ jobs:
           if [ ! -d occt-prefix ] && [ -f seed/occt-ios.tgz ]; then
             tar -xzf seed/occt-ios.tgz
           fi
+          mkdir -p occt-prefix
           cfg=$(find occt-prefix -name OpenCASCADEConfig.cmake 2>/dev/null | head -1)
           dylib=$(find occt-prefix -name libocct.dylib 2>/dev/null | head -1)
           echo "config $cfg"
