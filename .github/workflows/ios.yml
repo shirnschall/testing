@@ -42,10 +42,12 @@ jobs:
 
       - id: need
         run: |
-          if [ ! -f occt-prefix/lib/cmake/opencascade/OpenCASCADEConfig.cmake ] && [ -f seed/occt-ios.tgz ]; then
+          if [ ! -d occt-prefix ] && [ -f seed/occt-ios.tgz ]; then
             tar -xzf seed/occt-ios.tgz
           fi
-          if [ -f occt-prefix/lib/cmake/opencascade/OpenCASCADEConfig.cmake ]; then
+          cfg=$(find occt-prefix -name OpenCASCADEConfig.cmake 2>/dev/null | head -1)
+          echo "config $cfg"
+          if [ -n "$cfg" ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
@@ -92,7 +94,9 @@ jobs:
           cmake --install build 2>&1 | tee -a occt-build.log
 
       - name: libraries
-        run: ls occt-prefix/lib
+        run: |
+          find occt-prefix -name OpenCASCADEConfig.cmake
+          find occt-prefix -name 'libTK*.a' | sort
 
   netgen:
     needs: occt
@@ -138,6 +142,9 @@ jobs:
           sed -i '' 's/^      if(NOT EMSCRIPTEN)$/      if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)/' netgen/CMakeLists.txt
           grep -n "if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)" netgen/CMakeLists.txt
 
+      - name: occt config
+        run: echo "OCCT_CMAKE_DIR=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")" >> "$GITHUB_ENV"
+
       - name: makerls
         run: |
           mkdir -p "$RUNNER_TEMP/host"
@@ -157,7 +164,7 @@ jobs:
             -DUSE_GUI=OFF \
             -DUSE_PYTHON=ON \
             -DUSE_OCC=ON \
-            -DOpenCascade_DIR="$PWD/occt-prefix/lib/cmake/opencascade" \
+            -DOpenCascade_DIR="$OCCT_CMAKE_DIR" \
             -DUSE_NATIVE_ARCH=OFF \
             -DBUILD_STUB_FILES=OFF \
             -DPREFER_SYSTEM_PYBIND11=OFF \
