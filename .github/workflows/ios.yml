@@ -674,45 +674,112 @@ jobs:
           python pyios/testbed clone testbed
           app="$PWD/testbed/iOSTestbed"
           stage="$PWD/stage"
-          libs="$stage/ios_libs"
-          mkdir -p "$libs" "$stage/planex"
+          fws="$stage/ios_frameworks"
+          mkdir -p "$fws" "$stage/planex"
           for init in "$(find "$PWD/prefix" -path '*/netgen/__init__.py' | head -1)" "$(find "$PWD/ngsolve-prefix" -path '*/ngsolve/__init__.py' | head -1)"; do
             echo "package $init"
             [ -f "$init" ]
             cp -R "$(dirname "$(dirname "$init")")"/. "$stage/"
           done
           cp "$(find planex-prefix -name '_planex_occ*.so' | head -1)" "$stage/planex/"
-          find occt-prefix prefix ngsolve-prefix -name '*.dylib' -exec cp -L {} "$libs/" \;
+          find occt-prefix prefix ngsolve-prefix -name '*.dylib' | while read -r f; do
+            name=$(basename "$f" .dylib)
+            name=${name#lib}
+            mkdir -p "$fws/$name.framework"
+            cp -L "$f" "$fws/$name.framework/$name"
+            plist="$fws/$name.framework/Info.plist"
+            cp pyios/Python.xcframework/build/iOS-dylib-Info-template.plist "$plist"
+            plutil -replace CFBundleExecutable -string "$name" "$plist"
+            plutil -replace CFBundleIdentifier -string "org.python.iOSTestbed.$name" "$plist"
+            plutil -replace MinimumOSVersion -string "$IOS_DEPLOYMENT_TARGET" "$plist"
+          done
           find "$stage" -name '*.cpython-*.so' ! -name '*-iphonesimulator.so' | while read -r f; do
             mv "$f" "${f%.cpython-*}.so"
           done
-          find "$stage" -type f \( -name '*.so' -o -name '*.dylib' \) | while read -r f; do
+          { find "$stage" -type f -name '*.so'; for d in "$fws"/*.framework; do echo "$d/$(basename "$d" .framework)"; done; } | while read -r f; do
             id=$(otool -D "$f" | tail -n +2)
             args=()
             for rp in $(otool -l "$f" | awk '/cmd LC_RPATH/{getline; getline; print $2}'); do
               args+=(-delete_rpath "$rp")
             done
             for dep in $(otool -L "$f" | tail -n +2 | awk '{print $1}'); do
-              base=$(basename "$dep")
-              if [ "$dep" != "$id" ] && [ -f "$libs/$base" ] && [ "$dep" != "@rpath/$base" ]; then
-                args+=(-change "$dep" "@rpath/$base")
+              name=$(basename "$dep" .dylib)
+              name=${name#lib}
+              if [ "$dep" != "$id" ] && [ -d "$fws/$name.framework" ]; then
+                args+=(-change "$dep" "@rpath/$name.framework/$name")
               fi
             done
-            if [ -n "$id" ]; then
-              args+=(-id "@rpath/$(basename "$f")")
-            fi
-            args+=(-add_rpath @executable_path/app_packages/ios_libs)
+            case "$f" in
+              "$fws"/*)
+                name=$(basename "$f")
+                args+=(-id "@rpath/$name.framework/$name")
+                ;;
+            esac
+            args+=(-add_rpath @executable_path/Frameworks)
             install_name_tool "${args[@]}" "$f"
             codesign --force --sign - "$f"
             echo "$f"
             otool -L "$f" | tail -n +2
           done
+          cat > testbed/install_frameworks.sh <<'EOF'
+          for fw in "$CODESIGNING_FOLDER_PATH"/app_packages/ios_frameworks/*.framework; do
+              dest="$CODESIGNING_FOLDER_PATH/Frameworks/$(basename "$fw")"
+              mv "$fw" "$dest"
+              /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" ${OTHER_CODE_SIGN_FLAGS:-} -o runtime --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$dest"
+          done
+          rmdir "$CODESIGNING_FOLDER_PATH/app_packages/ios_frameworks"
+          EOF
+          python - testbed/iOSTestbed.xcodeproj/project.pbxproj <<'EOF'
+          import sys
+          path = sys.argv[1]
+          text = open(path).read()
+          old = "install_python Python.xcframework app app_packages"
+          assert text.count(old) == 1
+          open(path, "w").write(text.replace(old, old + "\\nsource $PROJECT_DIR/install_frameworks.sh"))
+          EOF
+          grep -c install_frameworks testbed/iOSTestbed.xcodeproj/project.pbxproj
           python -m pip install --only-binary=:all: --platform "ios_${IOS_DEPLOYMENT_TARGET/./_}_arm64_iphonesimulator" --target "$app/app_packages" "$(ls wheels/*iphonesimulator.whl | head -1)" pytest
           cp -R "$stage"/. "$app/app_packages/"
           cp tests/ios_stack_test.py "$app/app/"
-          ls "$app/app_packages" "$app/app_packages/ios_libs"
+          ls "$app/app_packages" "$fws"
 
       - name: run
         run: |
           xcrun simctl list devices available | grep -i -E "ipad|iphone 16e" || true
           python testbed run --verbose --simulator "iPhone 16e,OS=18.5" -- ios_stack_test
+
+      - name: layout
+        if: ${{ !cancelled() }}
+        run: |
+          bundle="$PWD/testbed/DerivedData/Build/Products/Debug-iphonesimulator/iOSTestbed.app"
+          bad=0
+          while read -r f; do
+            if file -b "$f" | grep -q '^Mach-O'; then
+              echo "binary outside Frameworks: ${f#"$bundle"/}"
+              bad=1
+            fi
+          done < <(find "$bundle/app" "$bundle/app_packages" "$bundle/python" -type f)
+          for fw in "$bundle"/Frameworks/*.framework; do
+            id=$(plutil -extract CFBundleIdentifier raw "$fw/Info.plist")
+            case "$id" in
+              org.python.iOSTestbed.*) ;;
+              *) continue ;;
+            esac
+            name=$(plutil -extract CFBundleExecutable raw "$fw/Info.plist")
+            if [ "$fw" != "$bundle/Frameworks/$name.framework" ] || [ ! -f "$fw/$name" ]; then
+              echo "framework without its binary: ${fw#"$bundle"/}"
+              bad=1
+              continue
+            fi
+            for dep in $(otool -arch arm64 -L "$fw/$name" | tail -n +2 | awk '{print $1}'); do
+              case "$dep" in
+                @rpath/*|@loader_path/*|@executable_path/*|/usr/lib/*|/System/Library/*) ;;
+                *)
+                  echo "${fw#"$bundle"/} links $dep"
+                  bad=1
+                  ;;
+              esac
+            done
+          done
+          ls "$bundle/Frameworks"
+          exit $bad
