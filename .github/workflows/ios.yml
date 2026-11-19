@@ -120,7 +120,7 @@ jobs:
             'file(WRITE ${CMAKE_BINARY_DIR}/occt.cpp "")' \
             'add_library(occt SHARED ${CMAKE_BINARY_DIR}/occt.cpp)' \
             'target_link_options(occt PRIVATE LINKER:-all_load)' \
-            'target_link_libraries(occt PRIVATE ${OpenCASCADE_LIBRARIES})' \
+            'target_link_libraries(occt PRIVATE ${OpenCASCADE_LIBRARIES} "-framework Foundation")' \
             > occt-shared/CMakeLists.txt
           cmake -S occt-shared -B occt-shared/build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
