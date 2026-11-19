@@ -129,7 +129,10 @@ jobs:
             2>&1 | tee occt-configure.log
           cmake --build build -j 3 2>&1 | tee occt-build.log
           cmake --install build 2>&1 | tee -a occt-build.log
-          tar -czf occt-ios.tgz occt-prefix
+
+      - name: archive
+        if: steps.need.outputs.build == 'true' || matrix.seed_run == ''
+        run: tar -czf occt-ios.tgz occt-prefix
 
       - if: steps.need.outputs.build == 'true'
         uses: actions/cache/save@v4
@@ -137,7 +140,7 @@ jobs:
           path: occt-prefix
           key: ${{ env.OCCT_STATIC_KEY }}${{ matrix.suffix }}
 
-      - if: steps.need.outputs.build == 'true'
+      - if: steps.need.outputs.build == 'true' || matrix.seed_run == ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.seed_name }}
