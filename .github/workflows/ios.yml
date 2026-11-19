@@ -14,6 +14,7 @@ defaults:
 
 env:
   NETGEN_COMMIT: 98232f962908dd16402f2cab343b62ea981a7c64
+  NGSOLVE_COMMIT: fb1c068b7a353d893bdc6b7f6c538b4338f39038
   OCCT_TAG: V8_0_1
   OCCT_SEED_RUN: "44445999000"
   OCCT_CACHE_KEY: occt-ios-V8_0_1-17.0-1
@@ -179,16 +180,123 @@ jobs:
             2>&1 | tee configure.log
 
       - name: build
-        continue-on-error: true
         run: |
           cmake --build build -j 3 2>&1 | tee build.log
           cmake --install build 2>&1 | tee -a build.log
-          find prefix -name '*.so' -o -name '*.dylib' | head -20
+          find prefix -name '*.so' -o -name '*.dylib' -o -name 'NetgenConfig.cmake' | head -30
+          tar -czf netgen-prefix.tgz prefix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netgen-prefix
+          path: netgen-prefix.tgz
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: netgen-ios
+          path: |
+            configure.log
+            build.log
+            build/CMakeCache.txt
+
+  ngsolve:
+    needs: netgen
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: netgen-prefix
+
+      - name: netgen
+        run: |
+          tar -xzf netgen-prefix.tgz
+          echo "OCCT_CMAKE_DIR=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")" >> "$GITHUB_ENV"
+          echo "NETGEN_CMAKE_DIR=$(dirname "$(find "$PWD/prefix" -name NetgenConfig.cmake | head -1)")" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: NGSolve/ngsolve
+          ref: ${{ env.NGSOLVE_COMMIT }}
+          path: ngsolve
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: tools
+        run: python -m pip install "cmake>=4" ninja
+
+      - name: python for ios
+        run: |
+          curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          mkdir pyios
+          tar -xzf pyios.tgz -C pyios
+          inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
+          lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
+          echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
+          echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
+          echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
+
+      - name: configure
+        run: |
+          echo "netgen $NETGEN_CMAKE_DIR"
+          echo "occt $OCCT_CMAKE_DIR"
+          cmake -S ngsolve -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ngsolve-prefix" \
+            -DUSE_SUPERBUILD=OFF \
+            -DNetgen_DIR="$NETGEN_CMAKE_DIR" \
+            -DOpenCascade_DIR="$OCCT_CMAKE_DIR" \
+            -DUSE_LAPACK=ON \
+            -DLAPACK_LIBRARIES="-framework Accelerate" \
+            -DUSE_MKL=OFF \
+            -DUSE_PARDISO=OFF \
+            -DUSE_UMFPACK=OFF \
+            -DUSE_MUMPS=OFF \
+            -DUSE_HYPRE=OFF \
+            -DUSE_MPI=OFF \
+            -DUSE_CUDA=OFF \
+            -DUSE_GUI=OFF \
+            -DUSE_NATIVE_ARCH=OFF \
+            -DMAX_SYS_DIM=1 \
+            -DUSE_FASTCOMPILE=1 \
+            -DBUILD_STUB_FILES=OFF \
+            -DBUILD_FOR_CONDA=ON \
+            -DUSE_PYTHON=ON \
+            -DPYBIND11_USE_CROSSCOMPILING=ON \
+            -DPython3_EXECUTABLE="$(command -v python)" \
+            -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
+            -DPython3_LIBRARY="$PY_IOS_LIB" \
+            -DPython_ROOT_DIR="$PY_IOS_ROOT" \
+            -DPython_INCLUDE_DIR="$PY_IOS_INC" \
+            -DPython_LIBRARY="$PY_IOS_LIB" \
+            -DNG_INSTALL_DIR_PYTHON=python \
+            2>&1 | tee configure.log
+
+      - name: build
+        run: |
+          cmake --build build -j 3 2>&1 | tee build.log
+          cmake --install build 2>&1 | tee -a build.log
+          find ngsolve-prefix -name '*.so' -o -name '*.dylib' | head -30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ngsolve-ios
           path: |
             configure.log
             build.log
