@@ -284,6 +284,8 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-march=armv8.3-a" \
+            -DCMAKE_CXX_FLAGS="-march=armv8.3-a" \
             -DCMAKE_INSTALL_PREFIX="$PWD/ngsolve-prefix" \
             -DUSE_SUPERBUILD=OFF \
             -DNetgen_DIR="$NETGEN_CMAKE_DIR" \
