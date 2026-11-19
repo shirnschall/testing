@@ -22,20 +22,31 @@ env:
   NETGEN_CACHE_KEY: netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-2-py313-2
   NGSOLVE_CACHE_KEY: ngsolve-ios-fb1c068b7a35-netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-2-py313-2-1
   IOS_DEPLOYMENT_TARGET: "17.0"
+  PYTHON_IOS_URL: https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
 
 jobs:
   occt:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: iphoneos
+            suffix: ""
+          - sdk: iphonesimulator
+            suffix: "-sim"
     runs-on: macos-15
     timeout-minutes: 240
+    env:
+      SDK: ${{ matrix.sdk }}
     steps:
       - id: cache
         uses: actions/cache@v4
         with:
           path: occt-prefix
-          key: ${{ env.OCCT_CACHE_KEY }}
+          key: ${{ env.OCCT_CACHE_KEY }}${{ matrix.suffix }}
 
       - id: seed
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cache.outputs.cache-hit != 'true' && matrix.sdk == 'iphoneos'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -85,7 +96,7 @@ jobs:
         run: |
           cmake -S occt -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_SYSROOT="$SDK" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -124,7 +135,7 @@ jobs:
             > occt-shared/CMakeLists.txt
           cmake -S occt-shared -B occt-shared/build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_SYSROOT="$SDK" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -145,20 +156,33 @@ jobs:
 
   netgen:
     needs: occt
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: iphoneos
+            slice: ios-arm64
+            suffix: ""
+          - sdk: iphonesimulator
+            slice: ios-arm64_x86_64-simulator
+            suffix: "-sim"
     runs-on: macos-15
     timeout-minutes: 120
+    env:
+      SDK: ${{ matrix.sdk }}
+      SLICE: ${{ matrix.slice }}
     steps:
       - id: cache
         uses: actions/cache@v4
         with:
           path: prefix
-          key: ${{ env.NETGEN_CACHE_KEY }}
+          key: ${{ env.NETGEN_CACHE_KEY }}${{ matrix.suffix }}
 
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: occt-prefix
-          key: ${{ env.OCCT_CACHE_KEY }}
+          key: ${{ env.OCCT_CACHE_KEY }}${{ matrix.suffix }}
           fail-on-cache-miss: true
 
       - if: steps.cache.outputs.cache-hit != 'true'
@@ -182,13 +206,15 @@ jobs:
       - name: python for ios
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          curl -sSL -o pyios.tgz "$PYTHON_IOS_URL"
           mkdir pyios
           tar -xzf pyios.tgz -C pyios
-          inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
-          lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
+          inc=$(find "$PWD/pyios" -type d -path "*$SLICE/include/python3.13" | head -1)
+          lib=$(find "$PWD/pyios" -path "*$SLICE/Python.framework/Python" | head -1)
           echo "include $inc"
           echo "library $lib"
+          [ -n "$inc" ]
+          [ -n "$lib" ]
           echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
           echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
@@ -215,7 +241,7 @@ jobs:
         run: |
           cmake -S netgen -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_SYSROOT="$SDK" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -257,7 +283,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && steps.cache.outputs.cache-hit != 'true'
         with:
-          name: netgen-ios
+          name: netgen-${{ matrix.sdk }}
           path: |
             configure.log
             build.log
@@ -265,27 +291,40 @@ jobs:
 
   ngsolve:
     needs: netgen
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: iphoneos
+            slice: ios-arm64
+            suffix: ""
+          - sdk: iphonesimulator
+            slice: ios-arm64_x86_64-simulator
+            suffix: "-sim"
     runs-on: macos-15
     timeout-minutes: 180
+    env:
+      SDK: ${{ matrix.sdk }}
+      SLICE: ${{ matrix.slice }}
     steps:
       - id: cache
         uses: actions/cache@v4
         with:
           path: ngsolve-prefix
-          key: ${{ env.NGSOLVE_CACHE_KEY }}
+          key: ${{ env.NGSOLVE_CACHE_KEY }}${{ matrix.suffix }}
 
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: occt-prefix
-          key: ${{ env.OCCT_CACHE_KEY }}
+          key: ${{ env.OCCT_CACHE_KEY }}${{ matrix.suffix }}
           fail-on-cache-miss: true
 
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: prefix
-          key: ${{ env.NETGEN_CACHE_KEY }}
+          key: ${{ env.NETGEN_CACHE_KEY }}${{ matrix.suffix }}
           fail-on-cache-miss: true
 
       - name: netgen
@@ -315,11 +354,13 @@ jobs:
       - name: python for ios
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          curl -sSL -o pyios.tgz "$PYTHON_IOS_URL"
           mkdir pyios
           tar -xzf pyios.tgz -C pyios
-          inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
-          lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
+          inc=$(find "$PWD/pyios" -type d -path "*$SLICE/include/python3.13" | head -1)
+          lib=$(find "$PWD/pyios" -path "*$SLICE/Python.framework/Python" | head -1)
+          [ -n "$inc" ]
+          [ -n "$lib" ]
           echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
           echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
@@ -346,11 +387,11 @@ jobs:
           echo "occt $OCCT_CMAKE_DIR"
           pyb="$PWD/ngsolve/external_dependencies/netgen/external_dependencies/pybind11/include"
           ls "$pyb/pybind11/pybind11.h"
-          veclib="$(xcrun --sdk iphoneos --show-sdk-path)/System/Library/Frameworks/Accelerate.framework/Frameworks"
+          veclib="$(xcrun --sdk "$SDK" --show-sdk-path)/System/Library/Frameworks/Accelerate.framework/Frameworks"
           ls "$veclib/vecLib.framework/Headers/cblas.h" "$veclib/vecLib.framework/Headers/Sparse/Solve.h"
           cmake -S ngsolve -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_SYSROOT="$SDK" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -401,7 +442,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && steps.cache.outputs.cache-hit != 'true'
         with:
-          name: ngsolve-ios
+          name: ngsolve-${{ matrix.sdk }}
           path: |
             configure.log
             build.log
@@ -409,19 +450,32 @@ jobs:
 
   planex2d-occ:
     needs: netgen
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: iphoneos
+            slice: ios-arm64
+            suffix: ""
+          - sdk: iphonesimulator
+            slice: ios-arm64_x86_64-simulator
+            suffix: "-sim"
     runs-on: macos-15
     timeout-minutes: 90
+    env:
+      SDK: ${{ matrix.sdk }}
+      SLICE: ${{ matrix.slice }}
     steps:
       - uses: actions/cache/restore@v4
         with:
           path: occt-prefix
-          key: ${{ env.OCCT_CACHE_KEY }}
+          key: ${{ env.OCCT_CACHE_KEY }}${{ matrix.suffix }}
           fail-on-cache-miss: true
 
       - uses: actions/cache/restore@v4
         with:
           path: prefix
-          key: ${{ env.NETGEN_CACHE_KEY }}
+          key: ${{ env.NETGEN_CACHE_KEY }}${{ matrix.suffix }}
           fail-on-cache-miss: true
 
       - uses: actions/setup-python@v5
@@ -433,15 +487,17 @@ jobs:
 
       - name: python for ios
         run: |
-          curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          curl -sSL -o pyios.tgz "$PYTHON_IOS_URL"
           mkdir pyios
           tar -xzf pyios.tgz -C pyios
-          inc=$(find "$PWD/pyios" -type d -path '*ios-arm64/include/python3.13' | head -1)
-          lib=$(find "$PWD/pyios" -path '*ios-arm64/Python.framework/Python' | head -1)
-          sysdata=$(find "$PWD/pyios" -name '_sysconfigdata_*iphoneos*.py' | head -1)
+          inc=$(find "$PWD/pyios" -type d -path "*$SLICE/include/python3.13" | head -1)
+          lib=$(find "$PWD/pyios" -path "*$SLICE/Python.framework/Python" | head -1)
+          sysdata=$(find "$PWD/pyios" -name "_sysconfigdata_*arm64-$SDK*.py" | head -1)
           soabi=$(sed -n "s/.*'SOABI': '\([^']*\)'.*/\1/p" "$sysdata" | head -1)
           echo "sysconfig $sysdata"
           echo "soabi $soabi"
+          [ -n "$inc" ]
+          [ -n "$lib" ]
           [ -n "$soabi" ]
           echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
@@ -456,13 +512,11 @@ jobs:
         run: |
           occt=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")
           netgen=$(dirname "$(find "$PWD/prefix" -name NetgenConfig.cmake | head -1)")
-          ngver=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$(find "$PWD/prefix" -path '*netgen/version.py' | head -1)")
           echo "occt $occt"
-          echo "netgen $netgen $ngver"
-          [ -n "$ngver" ]
+          echo "netgen $netgen"
           cmake -S "planex2d-$PLANEX2D_VERSION" -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_SYSROOT="$SDK" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -470,7 +524,7 @@ jobs:
             -DPLANEX_CORE=OFF \
             -DPLANEX_OCC=ON \
             -DPLANEX_VERSION="$PLANEX2D_VERSION" \
-            -DPLANEX_OCC_DESTINATION="planex_occ/ng_${ngver//./_}" \
+            -DPLANEX_OCC_DESTINATION=planex \
             -DNetgen_DIR="$netgen" \
             -DOpenCASCADE_DIR="$occt" \
             -DPython3_EXECUTABLE="$(command -v python)" \
@@ -487,10 +541,147 @@ jobs:
           otool -L "$(find planex-prefix -name '_planex_occ*.so' | head -1)"
 
       - uses: actions/upload-artifact@v4
+        with:
+          name: planex2d-occ-${{ matrix.sdk }}
+          path: planex-prefix
+
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: planex2d-occ-ios
+          name: planex2d-occ-logs-${{ matrix.sdk }}
           path: |
             configure.log
             build.log
             build/CMakeCache.txt
+
+  planex2d-core:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: sources
+        run: curl -sSfL --retry 3 -o "planex2d-$PLANEX2D_VERSION.tar.gz" "https://files.pythonhosted.org/packages/source/p/planex2d/planex2d-$PLANEX2D_VERSION.tar.gz"
+
+      - name: wheels
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOYMENT_TARGET }}
+          CIBW_PLATFORM: ios
+          CIBW_BUILD: cp313-ios_arm64_iphoneos cp313-ios_arm64_iphonesimulator
+          CIBW_ENVIRONMENT: IPHONEOS_DEPLOYMENT_TARGET=${{ env.IOS_DEPLOYMENT_TARGET }}
+          CIBW_CONFIG_SETTINGS: cmake.define.PLANEX_OCC=OFF
+          CIBW_XBUILD_TOOLS: cmake ninja
+          CIBW_TEST_SOURCES: tests
+          CIBW_TEST_REQUIRES: pytest
+          CIBW_TEST_COMMAND: python -m pytest -v tests/ios_smoke_test.py
+          CIBW_BUILD_VERBOSITY: 1
+          PIP_EXTRA_INDEX_URL: https://pypi.anaconda.org/beeware/simple
+          PIP_ONLY_BINARY: numpy
+        run: |
+          python -m pip install cibuildwheel==4.3.5
+          python -m cibuildwheel --output-dir wheelhouse "planex2d-$PLANEX2D_VERSION.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: planex2d-core-ios
+          path: wheelhouse/*.whl
+
+  simulator:
+    needs: [ngsolve, planex2d-occ, planex2d-core]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: occt-prefix
+          key: ${{ env.OCCT_CACHE_KEY }}-sim
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: prefix
+          key: ${{ env.NETGEN_CACHE_KEY }}-sim
+          fail-on-cache-miss: true
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ngsolve-prefix
+          key: ${{ env.NGSOLVE_CACHE_KEY }}-sim
+          fail-on-cache-miss: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: planex2d-occ-iphonesimulator
+          path: planex-prefix
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: planex2d-core-ios
+          path: wheels
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: python for ios
+        run: |
+          curl -sSL -o pyios.tgz "$PYTHON_IOS_URL"
+          mkdir pyios
+          tar -xzf pyios.tgz -C pyios
+          ls pyios
+
+      - name: app
+        env:
+          PIP_EXTRA_INDEX_URL: https://pypi.anaconda.org/beeware/simple
+        run: |
+          python pyios/testbed clone testbed
+          app="$PWD/testbed/iOSTestbed"
+          stage="$PWD/stage"
+          libs="$stage/ios_libs"
+          mkdir -p "$libs" "$stage/planex"
+          for init in "$(find "$PWD/prefix" -path '*/netgen/__init__.py' | head -1)" "$(find "$PWD/ngsolve-prefix" -path '*/ngsolve/__init__.py' | head -1)"; do
+            echo "package $init"
+            [ -f "$init" ]
+            cp -R "$(dirname "$(dirname "$init")")"/. "$stage/"
+          done
+          cp "$(find planex-prefix -name '_planex_occ*.so' | head -1)" "$stage/planex/"
+          find occt-prefix prefix ngsolve-prefix -name '*.dylib' -exec cp -L {} "$libs/" \;
+          find "$stage" -name '*.cpython-*.so' ! -name '*-iphonesimulator.so' | while read -r f; do
+            mv "$f" "${f%.cpython-*}.so"
+          done
+          find "$stage" -type f \( -name '*.so' -o -name '*.dylib' \) | while read -r f; do
+            id=$(otool -D "$f" | tail -n +2)
+            args=()
+            for rp in $(otool -l "$f" | awk '/cmd LC_RPATH/{getline; getline; print $2}'); do
+              args+=(-delete_rpath "$rp")
+            done
+            for dep in $(otool -L "$f" | tail -n +2 | awk '{print $1}'); do
+              base=$(basename "$dep")
+              if [ "$dep" != "$id" ] && [ -f "$libs/$base" ] && [ "$dep" != "@rpath/$base" ]; then
+                args+=(-change "$dep" "@rpath/$base")
+              fi
+            done
+            if [ -n "$id" ]; then
+              args+=(-id "@rpath/$(basename "$f")")
+            fi
+            args+=(-add_rpath @executable_path/app_packages/ios_libs)
+            install_name_tool "${args[@]}" "$f"
+            codesign --force --sign - "$f"
+            echo "$f"
+            otool -L "$f" | tail -n +2
+          done
+          python -m pip install --only-binary=:all: --platform "ios_${IOS_DEPLOYMENT_TARGET/./_}_arm64_iphonesimulator" --target "$app/app_packages" "$(ls wheels/*iphonesimulator.whl | head -1)" pytest
+          cp -R "$stage"/. "$app/app_packages/"
+          cp tests/ios_stack_test.py "$app/app/"
+          ls "$app/app_packages" "$app/app_packages/ios_libs"
+
+      - name: run
+        run: |
+          xcrun simctl list devices available | grep -i -E "ipad|iphone 16e" || true
+          python testbed run --verbose --simulator "iPhone 16e,OS=18.5" -- ios_stack_test
