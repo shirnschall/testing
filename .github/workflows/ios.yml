@@ -18,6 +18,7 @@ env:
   OCCT_TAG: V8_0_1
   OCCT_SEED_RUN: "44445999000"
   OCCT_CACHE_KEY: occt-ios-V8_0_1-17.0-1
+  NETGEN_CACHE_KEY: netgen-ios-98232f962908-occt-ios-V8_0_1-17.0-1-py313-1
   IOS_DEPLOYMENT_TARGET: "17.0"
 
 jobs:
@@ -104,13 +105,21 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     steps:
-      - uses: actions/cache/restore@v4
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: prefix
+          key: ${{ env.NETGEN_CACHE_KEY }}
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
         with:
           path: occt-prefix
           key: ${{ env.OCCT_CACHE_KEY }}
           fail-on-cache-miss: true
 
-      - uses: actions/checkout@v4
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
         with:
           repository: NGSolve/netgen
           ref: ${{ env.NETGEN_COMMIT }}
@@ -118,14 +127,17 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
       - name: tools
+        if: steps.cache.outputs.cache-hit != 'true'
         run: python -m pip install "cmake>=4" ninja
 
       - name: python for ios
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           curl -sSL -o pyios.tgz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
           mkdir pyios
@@ -139,20 +151,24 @@ jobs:
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
 
       - name: patch
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           sed -i '' 's/^      if(NOT EMSCRIPTEN)$/      if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)/' netgen/CMakeLists.txt
           grep -n "if(NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)" netgen/CMakeLists.txt
 
       - name: occt config
+        if: steps.cache.outputs.cache-hit != 'true'
         run: echo "OCCT_CMAKE_DIR=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")" >> "$GITHUB_ENV"
 
       - name: makerls
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/host"
           c++ -O2 netgen/rules/makerlsfile.cpp -o "$RUNNER_TEMP/host/makerls"
           echo "$RUNNER_TEMP/host" >> "$GITHUB_PATH"
 
       - name: configure
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cmake -S netgen -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -180,19 +196,14 @@ jobs:
             2>&1 | tee configure.log
 
       - name: build
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cmake --build build -j 3 2>&1 | tee build.log
           cmake --install build 2>&1 | tee -a build.log
           find prefix -name '*.so' -o -name '*.dylib' -o -name 'NetgenConfig.cmake' | head -30
-          tar -czf netgen-prefix.tgz prefix
 
       - uses: actions/upload-artifact@v4
-        with:
-          name: netgen-prefix
-          path: netgen-prefix.tgz
-
-      - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.cache.outputs.cache-hit != 'true'
         with:
           name: netgen-ios
           path: |
@@ -211,13 +222,14 @@ jobs:
           key: ${{ env.OCCT_CACHE_KEY }}
           fail-on-cache-miss: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/cache/restore@v4
         with:
-          name: netgen-prefix
+          path: prefix
+          key: ${{ env.NETGEN_CACHE_KEY }}
+          fail-on-cache-miss: true
 
       - name: netgen
         run: |
-          tar -xzf netgen-prefix.tgz
           echo "OCCT_CMAKE_DIR=$(dirname "$(find "$PWD/occt-prefix" -name OpenCASCADEConfig.cmake | head -1)")" >> "$GITHUB_ENV"
           echo "NETGEN_CMAKE_DIR=$(dirname "$(find "$PWD/prefix" -name NetgenConfig.cmake | head -1)")" >> "$GITHUB_ENV"
 
@@ -246,6 +258,12 @@ jobs:
           echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
           echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
+
+      - name: kernel_generator
+        run: |
+          mkdir -p "$RUNNER_TEMP/host"
+          c++ -std=c++20 -O2 ngsolve/basiclinalg/generate_mat_kernels.cpp -o "$RUNNER_TEMP/host/kernel_generator"
+          echo "$RUNNER_TEMP/host" >> "$GITHUB_PATH"
 
       - name: configure
         run: |
