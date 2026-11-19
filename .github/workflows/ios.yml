@@ -43,6 +43,8 @@ jobs:
           CIBW_TEST_REQUIRES: "pytest"
           CIBW_TEST_COMMAND: "python -m pytest ios_smoke_test.py -v"
           CIBW_BUILD_VERBOSITY: "1"
+          CIBW_ENVIRONMENT: "IPHONEOS_DEPLOYMENT_TARGET=${{ env.IOS_DEPLOYMENT_TARGET }}"
+          IPHONEOS_DEPLOYMENT_TARGET: ${{ env.IOS_DEPLOYMENT_TARGET }}
           PIP_EXTRA_INDEX_URL: "https://pypi.anaconda.org/beeware/simple"
           PIP_ONLY_BINARY: "numpy"
         run: |
@@ -92,6 +94,12 @@ jobs:
             -DUSE_NATIVE_ARCH=OFF \
             -DBUILD_STUB_FILES=OFF \
             2>&1 | tee configure.log
+
+      - name: makerls
+        run: |
+          mkdir -p "$RUNNER_TEMP/host"
+          c++ -O2 netgen/rules/makerlsfile.cpp -o "$RUNNER_TEMP/host/makerls"
+          echo "$RUNNER_TEMP/host" >> "$GITHUB_PATH"
 
       - name: build
         continue-on-error: true
