@@ -99,6 +99,7 @@ jobs:
           echo "include $inc"
           echo "library $lib"
           echo "PY_IOS_INC=$inc" >> "$GITHUB_ENV"
+          echo "PY_IOS_ROOT=$(dirname "$(dirname "$inc")")" >> "$GITHUB_ENV"
           echo "PY_IOS_LIB=$lib" >> "$GITHUB_ENV"
 
       - name: makerls
@@ -127,9 +128,10 @@ jobs:
             -DPython3_EXECUTABLE="$(command -v python)" \
             -DPython3_INCLUDE_DIR="$PY_IOS_INC" \
             -DPython3_LIBRARY="$PY_IOS_LIB" \
-            -DPython_EXECUTABLE="$(command -v python)" \
+            -DPython_ROOT_DIR="$PY_IOS_ROOT" \
             -DPython_INCLUDE_DIR="$PY_IOS_INC" \
             -DPython_LIBRARY="$PY_IOS_LIB" \
+            --debug-find-pkg=Python \
             -DNG_INSTALL_DIR_PYTHON=python \
             2>&1 | tee configure.log
 
